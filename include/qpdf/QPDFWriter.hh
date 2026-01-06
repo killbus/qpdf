@@ -428,6 +428,20 @@ class QPDFWriter
     QPDF_DLL
     void write();
 
+    // Initialize the write process for chunked writing.
+    QPDF_DLL
+    void initializeWrite();
+
+    // Execute one step of the write process. Returns a positive integer (1) if there is more work to
+    // do, 0 if the write is complete, and -1 if an error occurred (though exceptions are typically
+    // thrown). max_objects controls how many objects are written in this step (0 for unlimited).
+    QPDF_DLL
+    int continueOneStep(int max_objects);
+
+    // Return the approximate progress of the write operation (0-100).
+    QPDF_DLL
+    int getProgress() const;
+
     // Return renumbered ObjGen that was written into the final file. This method can be used after
     // calling write().
     QPDF_DLL

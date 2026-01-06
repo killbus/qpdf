@@ -62,6 +62,7 @@ namespace
         // pipeline and the pipeline stack to be popped until the top of stack is a previous active
         // top of stack and restores the pipeline to that point. It deletes any pipelines that it
         // pops.
+      public:
         class Popper
         {
             friend class Pl_stack;
@@ -299,6 +300,23 @@ namespace qpdf::impl
         }
 
         void write();
+
+        // Chunked writing support
+        enum class Step {
+            kNotStarted,
+            kEnqueueObjects,
+            kWriteObjectsLoop,
+            kWriteEncryptionDict,
+            kWriteXRef,
+            kWriteTrailer,
+            kComplete,
+            kError
+        };
+
+        void initializeWrite();
+        int continueOneStep(int max_objects);
+        int getProgress() const;
+
         std::map<QPDFObjGen, QPDFXRefEntry> getWrittenXRefTable();
         void setMinimumPDFVersion(std::string const& version, int extension_level = 0);
         void copyEncryptionParameters(QPDF&);
@@ -466,6 +484,9 @@ namespace qpdf::impl
         int events_expected{0};
         int events_seen{0};
         int next_progress_report{0};
+
+        Step step_{Step::kNotStarted};
+        Pl_stack::Popper md5_waiter;
     }; // class qpdf::impl::Writer
 
 } // namespace qpdf::impl
@@ -3230,4 +3251,165 @@ impl::Writer::writeStandard()
             "QPDFWriter standard deterministic ID",
             object_stream_to_objects.empty() ? 0 : 1);
     }
+}
+
+//
+// Chunked writing support implementation
+//
+
+void
+QPDFWriter::initializeWrite()
+{
+    m->initializeWrite();
+}
+
+int
+QPDFWriter::continueOneStep(int max_objects)
+{
+    return m->continueOneStep(max_objects);
+}
+
+int
+QPDFWriter::getProgress() const
+{
+    return m->getProgress();
+}
+
+void
+impl::Writer::initializeWrite()
+{
+    if (did_write_setup) {
+        return;
+    }
+
+    // Logic copied from write() start
+    if (this->pipeline == 0) {
+        filename = "memory buffer";
+        buffer_pipeline = std::make_unique<Pl_Buffer>("qpdf output");
+        pipeline_stack.initialize(buffer_pipeline.get());
+    }
+    doWriteSetup();
+    prepareFileForWrite();
+
+    if (cfg.deterministic_id()) {
+        md5_waiter = pipeline_stack.popper();
+        pipeline_stack.activate_md5(md5_waiter);
+    }
+
+    step_ = Step::kNotStarted;
+
+    // For progress reporting
+    next_progress_report = 0;
+    events_seen = 0;
+    events_expected = 0;
+}
+
+int
+impl::Writer::continueOneStep(int max_objects)
+{
+    // Fallback for linearization (blocking mode for now)
+    if (cfg.linearize()) {
+        if (step_ == Step::kNotStarted) {
+            writeLinearized();
+
+            if (cfg.deterministic_id()) {
+                QTC::TC("qpdf", "QPDFWriter linearized deterministic ID", 0);
+                md5_waiter.pop();
+            }
+
+            step_ = Step::kComplete;
+            return 0;
+        }
+        return 0;
+    }
+
+    switch (step_) {
+        case Step::kNotStarted:
+            writeHeader();
+            write(cfg.extra_header_text());
+            step_ = Step::kEnqueueObjects;
+            return 1;
+
+        case Step::kEnqueueObjects:
+            if (cfg.pclm()) {
+                enqueueObjectsPCLm();
+            } else {
+                enqueueObjectsStandard();
+            }
+            // Initialize progress expectations
+            if (object_stream_to_objects.empty()) {
+                events_expected = static_cast<int>(object_queue.size());
+            } else {
+                // In object stream mode, we count pass 1 (generation) and pass 2 (writing)
+                // Roughly 2x objects.
+                events_expected = static_cast<int>(object_queue.size() * 2);
+            }
+
+            step_ = Step::kWriteObjectsLoop;
+            return 1;
+
+        case Step::kWriteObjectsLoop: {
+            int count = 0;
+            // object_queue_front is member variable
+            while (object_queue_front < object_queue.size()) {
+                 QPDFObjectHandle cur_object = object_queue.at(object_queue_front);
+                 ++object_queue_front;
+
+                 writeObject(cur_object);
+                 indicateProgress(false, false);
+
+                 if (max_objects > 0 && ++count >= max_objects) {
+                     return 1; // Yield
+                 }
+            }
+            step_ = Step::kWriteEncryptionDict;
+            return 1;
+        }
+
+        case Step::kWriteEncryptionDict:
+            if (encryption) {
+                writeEncryptionDictionary();
+            }
+            step_ = Step::kWriteXRef;
+            return 1;
+
+        case Step::kWriteXRef: {
+            // Logic copied from writeStandard end
+            qpdf_offset_t xref_offset = pipeline->getCount();
+            if (object_stream_to_objects.empty()) {
+                writeXRefTable(t_normal, 0, next_objid - 1, next_objid);
+            } else {
+                int xref_id = next_objid++;
+                writeXRefStream(xref_id, xref_id, xref_offset, t_normal, 0, next_objid - 1, next_objid);
+            }
+            write("startxref\n").write(xref_offset).write("\n%%EOF\n");
+
+            if (cfg.deterministic_id()) {
+                QTC::TC(
+                    "qpdf",
+                    "QPDFWriter standard deterministic ID",
+                    object_stream_to_objects.empty() ? 0 : 1);
+                md5_waiter.pop();
+            }
+
+            indicateProgress(false, true); // Finished
+            step_ = Step::kComplete;
+            return 0; // Complete
+        }
+
+        case Step::kComplete:
+            return 0;
+
+        case Step::kError:
+        default:
+            return -1;
+    }
+}
+
+int
+impl::Writer::getProgress() const
+{
+    if (step_ == Step::kComplete) return 100;
+    if (events_expected == 0) return 0;
+    return std::min(99, (100 * events_seen) / events_expected);
 }

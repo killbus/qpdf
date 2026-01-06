@@ -431,6 +431,15 @@ extern "C" {
     QPDF_DLL
     unsigned char const* qpdf_get_buffer(qpdf_data qpdf);
 
+    /* Initialize for writing to a custom stream callback.
+     * The callback function receives data, length, and the udata pointer.
+     * It should return 0 on success, non-zero on error.
+     */
+    typedef int (*qpdf_stream_write_fn)(unsigned char const* data, size_t len, void* udata);
+
+    QPDF_DLL
+    QPDF_ERROR_CODE qpdf_init_write_stream(qpdf_data qpdf, qpdf_stream_write_fn callback, void* udata);
+
     QPDF_DLL
     void qpdf_set_object_stream_mode(qpdf_data qpdf, enum qpdf_object_stream_e mode);
 
@@ -577,6 +586,27 @@ extern "C" {
     /* Do actual write operation. */
     QPDF_DLL
     QPDF_ERROR_CODE qpdf_write(qpdf_data qpdf);
+
+    /* Chunked/incremental writing support.
+     * Enables non-blocking PDF generation with progress reporting.
+     *
+     * Usage:
+     *   qpdf_init_write(...);
+     *   qpdf_write_begin(qpdf);
+     *   int done = 0;
+     *   while (!done) {
+     *       if (qpdf_write_continue(qpdf, max_objects, &done) & QPDF_ERRORS) break;
+     *       // optionally: qpdf_get_write_progress(qpdf) for progress
+     *   }
+     */
+    QPDF_DLL
+    QPDF_ERROR_CODE qpdf_write_begin(qpdf_data qpdf);
+
+    QPDF_DLL
+    QPDF_ERROR_CODE qpdf_write_continue(qpdf_data qpdf, int max_objects, int* done);
+
+    QPDF_DLL
+    int qpdf_get_write_progress(qpdf_data qpdf);
 
     /* Object handling.
      *

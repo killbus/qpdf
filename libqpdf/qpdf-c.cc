@@ -489,6 +489,59 @@ qpdf_init_write_memory(qpdf_data qpdf)
     return status;
 }
 
+// Pipeline adapter for custom callback-based output
+// Callback returns 0 on success, non-zero on failure
+typedef int (*qpdf_stream_write_fn)(const unsigned char* data, size_t len, void* udata);
+
+class Pl_Callback : public Pipeline
+{
+  public:
+    Pl_Callback(const char* identifier, qpdf_stream_write_fn callback, void* udata) :
+        Pipeline(identifier, nullptr),
+        callback_(callback),
+        udata_(udata)
+    {
+    }
+
+    virtual ~Pl_Callback() = default;
+
+    virtual void write(unsigned char const* data, size_t len) override
+    {
+        if (callback_(data, len, udata_) != 0) {
+            throw std::runtime_error("Callback pipeline write failed");
+        }
+    }
+
+    virtual void finish() override
+    {
+        // No-op: flushing handled by standard pipeline logic, stream end managed by caller
+    }
+
+  private:
+    qpdf_stream_write_fn callback_;
+    void* udata_;
+};
+
+static void
+call_init_write_stream(qpdf_data qpdf, qpdf_stream_write_fn callback, void* udata)
+{
+    qpdf->qpdf_writer = std::make_shared<QPDFWriter>(*(qpdf->qpdf));
+    qpdf->qpdf_writer->setOutputPipeline(new Pl_Callback("stream", callback, udata));
+}
+
+QPDF_ERROR_CODE
+qpdf_init_write_stream(qpdf_data qpdf, qpdf_stream_write_fn callback, void* udata)
+{
+    qpdf_init_write_internal(qpdf);
+    // Wrap the initialization in standard error trapping
+    // We need to capture callback/udata, so we can't use the static function pointer directly with existing wrappers easily
+    // But trap_errors takes std::function, so we can use lambda.
+
+    return trap_errors(qpdf, [=](qpdf_data q) {
+        call_init_write_stream(q, callback, udata);
+    });
+}
+
 static void
 qpdf_get_buffer_internal(qpdf_data qpdf)
 {
@@ -792,6 +845,40 @@ qpdf_write(qpdf_data qpdf)
     status = trap_errors(qpdf, &call_write);
     QTC::TC("qpdf", "qpdf-c called qpdf_write", (status == 0) ? 0 : 1);
     return status;
+}
+
+QPDF_ERROR_CODE
+qpdf_write_begin(qpdf_data qpdf)
+{
+    auto fn = [](qpdf_data q) {
+        q->qpdf_writer->initializeWrite();
+    };
+    QPDF_ERROR_CODE status = trap_errors(qpdf, fn);
+    QTC::TC("qpdf", "qpdf-c called qpdf_write_begin", (status == 0) ? 0 : 1);
+    return status;
+}
+
+QPDF_ERROR_CODE
+qpdf_write_continue(qpdf_data qpdf, int max_objects, int* done)
+{
+    if (done) *done = 1; // Default to done if error occurs
+
+    auto fn = [max_objects, done](qpdf_data q) {
+        int res = q->qpdf_writer->continueOneStep(max_objects);
+        if (done) *done = (res == 0);
+    };
+
+    QPDF_ERROR_CODE status = trap_errors(qpdf, fn);
+    return status;
+}
+
+int
+qpdf_get_write_progress(qpdf_data qpdf)
+{
+    if (qpdf->qpdf_writer) {
+        return qpdf->qpdf_writer->getProgress();
+    }
+    return 0;
 }
 
 void
