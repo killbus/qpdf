@@ -838,6 +838,16 @@ qpdf_register_progress_reporter(
             std::bind(report_progress, std::placeholders::_1, data))));
 }
 
+void
+qpdf_register_canceler(
+    qpdf_data qpdf, int (*check_cancel)(void* data), void* data)
+{
+    QTC::TC("qpdf", "qpdf-c registered canceler");
+    qpdf->qpdf_writer->registerCanceler(
+        std::shared_ptr<QPDFWriter::Canceler>(new QPDFWriter::FunctionCanceler(
+            [check_cancel, data]() { return check_cancel(data) != 0; })));
+}
+
 QPDF_ERROR_CODE
 qpdf_write(qpdf_data qpdf)
 {

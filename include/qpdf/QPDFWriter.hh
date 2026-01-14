@@ -101,6 +101,30 @@ class QPDFWriter
         std::function<void(int)> handler;
     };
 
+    class QPDF_DLL_CLASS Canceler
+    {
+      public:
+        QPDF_DLL
+        virtual ~Canceler();
+
+        // Returns true if the operation should be cancelled.
+        virtual bool shouldCancel() = 0;
+    };
+
+    class QPDF_DLL_CLASS FunctionCanceler: public Canceler
+    {
+      public:
+        QPDF_DLL
+        FunctionCanceler(std::function<bool()>);
+        QPDF_DLL
+        ~FunctionCanceler() override;
+        QPDF_DLL
+        bool shouldCancel() override;
+
+      private:
+        std::function<bool()> handler;
+    };
+
     // Setting Output.  Output may be set only one time.  If you don't use the filename version of
     // the QPDFWriter constructor, you must call exactly one of these methods.
 
@@ -415,6 +439,11 @@ class QPDFWriter
     // reportProgress method.
     QPDF_DLL
     void registerProgressReporter(std::shared_ptr<ProgressReporter>);
+
+    // If you want to be able to cancel the operation, derive a class from Canceler and override the
+    // shouldCancel method.
+    QPDF_DLL
+    void registerCanceler(std::shared_ptr<Canceler>);
 
     // Return the PDF version that will be written into the header. Calling this method does all the
     // preparation for writing, so it is an error to call any methods that may cause a change to the

@@ -583,6 +583,15 @@ extern "C" {
     void qpdf_register_progress_reporter(
         qpdf_data qpdf, void (*report_progress)(int percent, void* data), void* data);
 
+    /* During write, your check_cancel function will be called periodically. The data object you pass
+     * to qpdf_register_canceler will be handed back to your function. This function must be called
+     * after qpdf_init_write (or qpdf_init_write_memory) and before qpdf_write. If your function
+     * returns non-zero, the write operation will be cancelled and an exception will be thrown.
+     */
+    QPDF_DLL
+    void qpdf_register_canceler(
+        qpdf_data qpdf, int (*check_cancel)(void* data), void* data);
+
     /* Do actual write operation. */
     QPDF_DLL
     QPDF_ERROR_CODE qpdf_write(qpdf_data qpdf);

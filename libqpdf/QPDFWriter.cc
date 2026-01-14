@@ -52,6 +52,28 @@ QPDFWriter::FunctionProgressReporter::reportProgress(int progress)
     handler(progress);
 }
 
+QPDFWriter::Canceler::~Canceler() // NOLINT (modernize-use-equals-default)
+{
+    // Must be explicit and not inline -- see QPDF_DLL_CLASS in README-maintainer
+}
+
+QPDFWriter::FunctionCanceler::FunctionCanceler(std::function<bool()> handler) :
+    handler(handler)
+{
+}
+
+QPDFWriter::FunctionCanceler::~FunctionCanceler() // NOLINT
+                                                  // (modernize-use-equals-default)
+{
+    // Must be explicit and not inline -- see QPDF_DLL_CLASS in README-maintainer
+}
+
+bool
+QPDFWriter::FunctionCanceler::shouldCancel()
+{
+    return handler();
+}
+
 namespace
 {
     class Pl_stack
@@ -481,6 +503,7 @@ namespace qpdf::impl
 
         // For progress reporting
         std::shared_ptr<QPDFWriter::ProgressReporter> progress_reporter;
+        std::shared_ptr<QPDFWriter::Canceler> canceler;
         int events_expected{0};
         int events_seen{0};
         int next_progress_report{0};
@@ -3181,6 +3204,10 @@ impl::Writer::indicateProgress(bool decrement, bool finished)
 
     ++events_seen;
 
+    if (canceler.get() && canceler->shouldCancel()) {
+        throw std::runtime_error("QPDFWriter: operation cancelled");
+    }
+
     if (!progress_reporter.get()) {
         return;
     }
@@ -3203,6 +3230,12 @@ void
 QPDFWriter::registerProgressReporter(std::shared_ptr<ProgressReporter> pr)
 {
     m->progress_reporter = pr;
+}
+
+void
+QPDFWriter::registerCanceler(std::shared_ptr<Canceler> c)
+{
+    m->canceler = c;
 }
 
 void
