@@ -2892,6 +2892,9 @@ impl::Writer::writeLinearized()
         "error encountered after writing part 9 of linearized data" //
     );
 
+    // Initialize progress tracking for linearization (2 passes)
+    events_expected = object_queue.size() * 2;
+
     qpdf_offset_t hint_length = 0;
     std::string hint_buffer;
 
